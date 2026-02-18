@@ -1,0 +1,7 @@
+watching old Who's line (first season) they do a hat gag, the whole high comedy of the show devolves to "im from x country" its not pure racism, idc about that, my point is like, its reminding me how in a box we were in pre911 white america. We didnt get much better after, just, thinking of that era as a kid who was white, suburban, raised on TV, but very open minded.. idk what my point is, just noting down.. 
+
+The younger generations, the post internet ones.. I'm on the very edge of it, its hard to imagine ever growing into adulthood as just like, american white guy. Like, a joke can be funny simply when foreigner cuz all you know is: office job, microwave dinner, cars and money, etc.. I mean, the supremacy of it all is whats shocking. We thought white supremacy was only when nazis. What about when you think modern westerners have life solved, when you're normal, despite being the furthest from either of those a culture has ever been. 
+
+edit:
+
+omg the final improv scene is just: two guys improvise gibberish farsi while two other guys improvise what they think they'd be saying xD improv can be anything 1/3rd of this show is gunna be "what if guys from other places seemed silly to us" isnt it xD

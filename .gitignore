@@ -1,0 +1,32 @@
+# Environment & Secrets
+.env
+.env.local
+*.pyc
+__pycache__/
+.venv/
+venv/
+DEEPSEEK_API_KEY.txt
+*API_KEY*
+*.secret
+
+# ChromaDB storage (rebuild on deploy)
+chroma_db/
+
+# Runtime directories
+SESSIONS/
+LOGS/
+flagged/
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Temp
+*.tmp
+*.log
