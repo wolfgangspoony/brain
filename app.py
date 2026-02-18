@@ -57,7 +57,7 @@ def initialize_brain():
 
 def chat(message: str, history: list) -> str:
     """Handle chat messages."""
-    global brain
+    global brain, current_session_id, last_saved_length
 
     if brain is None:
         brain, error = initialize_brain()
@@ -357,7 +357,6 @@ def chat(message: str, history: list) -> str:
         if not result:
             return f"Session `{restore_id}` not found."
 
-        global current_session_id, last_saved_length
         restored_history, metadata = result
 
         # Update brain history
@@ -417,8 +416,6 @@ def chat(message: str, history: list) -> str:
         return "\n".join(lines)
 
     try:
-        global current_session_id, last_saved_length
-
         # Start new session if needed
         if current_session_id is None:
             current_session_id = f"session_{uuid.uuid4().hex[:8]}"
@@ -456,7 +453,7 @@ def chat(message: str, history: list) -> str:
 
 def chat_streaming(message: str, history: list):
     """Handle chat messages with streaming response."""
-    global brain
+    global brain, current_session_id, last_saved_length
 
     if brain is None:
         brain, error = initialize_brain()
@@ -470,8 +467,6 @@ def chat_streaming(message: str, history: list):
         return
 
     try:
-        global current_session_id, last_saved_length
-
         # Start new session if needed
         if current_session_id is None:
             current_session_id = f"session_{uuid.uuid4().hex[:8]}"
