@@ -741,7 +741,12 @@ Evolves through conversation. Remembers. Forms beliefs. Updates itself.
     recompile_btn.click(do_recompile, outputs=[status])
 
 
+# Load environment and launch
+from dotenv import load_dotenv
+load_dotenv()
+
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
     app.launch(share=False)
+else:
+    # For Hugging Face Spaces
+    app.launch()
