@@ -1,32 +1,37 @@
-# Environment & Secrets
-.env
-.env.local
-*.pyc
+# Secrets
+*.txt
+!requirements.txt
+HF_TOKEN*
+DEEPSEEK_API_KEY*
+
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
 .venv/
 venv/
-DEEPSEEK_API_KEY.txt
-*API_KEY*
-*.secret
+ENV/
 
-# ChromaDB storage (rebuild on deploy)
-chroma_db/
-
-# Runtime directories
-SESSIONS/
-LOGS/
-flagged/
-
-# OS
-.DS_Store
-Thumbs.db
-nul
+# ChromaDB persistence
+.chroma/
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
 .claude/
 
-# Temp
-*.tmp
-*.log
+# Local knowledge (this is runtime data)
+KNOWLEDGE/
+
+# Misc
+nul
