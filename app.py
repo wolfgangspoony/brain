@@ -3,7 +3,7 @@ from huggingface_hub import InferenceClient
 
 import config
 
-# Simple client setup
+# Setup client
 if config.DEEPSEEK_API_KEY:
     client = InferenceClient(
         base_url="https://api.deepseek.com/v1",
@@ -18,11 +18,13 @@ else:
     model = config.MODEL
 
 
-def respond(message, history):
+def chat(message, history):
     messages = [{"role": "system", "content": "You are a helpful assistant."}]
 
-    for msg in history:
-        messages.append({"role": msg["role"], "content": msg["content"]})
+    for h in history:
+        messages.append({"role": "user", "content": h[0]})
+        if h[1]:
+            messages.append({"role": "assistant", "content": h[1]})
 
     messages.append({"role": "user", "content": message})
 
@@ -38,15 +40,27 @@ def respond(message, history):
             yield response
 
 
-demo = gr.ChatInterface(
-    fn=respond,
-    chatbot=gr.Chatbot(height=500),
-    textbox=gr.Textbox(placeholder="Type a message...", container=False, scale=7),
-    title="Brain",
-    description="A simple chatbot",
-    examples=["Hello", "What can you help me with?", "Tell me a joke"],
-    cache_examples=False,
-)
+with gr.Blocks(title="Brain") as demo:
+    gr.Markdown("# Brain\nA simple chatbot.")
+
+    chatbot = gr.Chatbot(height=450)
+    msg = gr.Textbox(placeholder="Type a message...", show_label=False)
+    clear = gr.Button("Clear")
+
+    def user_input(message, history):
+        return "", history + [[message, None]]
+
+    def bot_response(history):
+        message = history[-1][0]
+        history[-1][1] = ""
+        for chunk in chat(message, history[:-1]):
+            history[-1][1] = chunk
+            yield history
+
+    msg.submit(user_input, [msg, chatbot], [msg, chatbot], queue=False).then(
+        bot_response, chatbot, chatbot
+    )
+    clear.click(lambda: None, None, chatbot, queue=False)
 
 if __name__ == "__main__":
     demo.launch()
