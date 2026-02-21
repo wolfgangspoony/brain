@@ -1,33 +1,51 @@
 import gradio as gr
-from being import get_being
-from knowledge import get_knowledge
+from huggingface_hub import InferenceClient
+
+import config
+
+# Simple client setup
+if config.DEEPSEEK_API_KEY:
+    client = InferenceClient(
+        base_url="https://api.deepseek.com/v1",
+        api_key=config.DEEPSEEK_API_KEY
+    )
+    model = "deepseek-chat"
+elif config.HF_TOKEN:
+    client = InferenceClient(token=config.HF_TOKEN)
+    model = config.MODEL
+else:
+    client = InferenceClient()
+    model = config.MODEL
 
 
 def respond(message, history):
-    being = get_being()
+    messages = [{"role": "system", "content": "You are a helpful assistant."}]
+
+    for msg in history:
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
+    messages.append({"role": "user", "content": message})
+
     response = ""
-    for chunk in being.respond(message, history):
-        response += chunk
-        yield response
-
-
-# Initialize
-try:
-    knowledge = get_knowledge()
-    archived = knowledge.archive_stream()
-    if archived:
-        print(f"Archived: {archived}")
-    if knowledge.collection is None or knowledge.collection.count() == 0:
-        knowledge.index_all()
-except Exception as e:
-    print(f"Init: {e}")
+    for chunk in client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=2048,
+        stream=True
+    ):
+        if chunk.choices and chunk.choices[0].delta.content:
+            response += chunk.choices[0].delta.content
+            yield response
 
 
 demo = gr.ChatInterface(
     fn=respond,
-    title="Being",
-    description="An emergent entity. Not an assistant. Speak to it as you would another mind.",
-    type="messages",
+    chatbot=gr.Chatbot(height=500),
+    textbox=gr.Textbox(placeholder="Type a message...", container=False, scale=7),
+    title="Brain",
+    description="A simple chatbot",
+    examples=["Hello", "What can you help me with?", "Tell me a joke"],
+    cache_examples=False,
 )
 
 if __name__ == "__main__":
