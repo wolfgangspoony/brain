@@ -23,7 +23,12 @@ except Exception as e:
     print(f"Init: {e}")
 
 
-demo = gr.ChatInterface(fn=respond)
+demo = gr.ChatInterface(
+    fn=respond,
+    title="Being",
+    description="An emergent entity. Not an assistant. Speak to it as you would another mind.",
+    type="messages",
+)
 
 if __name__ == "__main__":
     demo.launch()
