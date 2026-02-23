@@ -8,11 +8,20 @@ client = InferenceClient(
 )
 
 
+def get_text(content):
+    """Extract plain text from Gradio 6 content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(b.get("text", "") for b in content if b.get("type") == "text")
+    return str(content)
+
+
 def chat(message, history):
     messages = [{"role": "system", "content": "You are a helpful assistant."}]
     for msg in history:
-        messages.append({"role": msg["role"], "content": msg["content"]})
-    messages.append({"role": "user", "content": message})
+        messages.append({"role": msg["role"], "content": get_text(msg["content"])})
+    messages.append({"role": "user", "content": get_text(message)})
 
     response = ""
     for chunk in client.chat.completions.create(
@@ -29,7 +38,6 @@ def chat(message, history):
 demo = gr.ChatInterface(
     fn=chat,
     title="Brain",
-    type="messages",
     theme=gr.themes.Soft(),
 )
 
