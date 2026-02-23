@@ -31,7 +31,7 @@ def chat(message, history):
     user_text = get_text(message)
 
     # Retrieve relevant chunks from the knowledge base
-    hits = kb.search(user_text, k=5)
+    hits = kb.search(user_text, k=15)
 
     system = SYSTEM_BASE
     if hits:
@@ -56,7 +56,7 @@ def chat(message, history):
             yield response
 
 
-with gr.Blocks(theme=gr.themes.Soft(), title="Brain") as demo:
+with gr.Blocks(title="Brain") as demo:
     gr.ChatInterface(fn=chat, title="Brain")
 
-demo.launch()
+demo.launch(theme=gr.themes.Soft())
