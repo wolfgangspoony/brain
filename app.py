@@ -1,20 +1,11 @@
+import os
 import gradio as gr
 from huggingface_hub import InferenceClient
 
-import config
-
-if config.DEEPSEEK_API_KEY:
-    client = InferenceClient(
-        base_url="https://api.deepseek.com/v1",
-        api_key=config.DEEPSEEK_API_KEY
-    )
-    model = "deepseek-chat"
-elif config.HF_TOKEN:
-    client = InferenceClient(token=config.HF_TOKEN)
-    model = config.MODEL
-else:
-    client = InferenceClient()
-    model = config.MODEL
+client = InferenceClient(
+    base_url="https://api.deepseek.com/v1",
+    api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+)
 
 
 def chat(message, history):
@@ -25,10 +16,10 @@ def chat(message, history):
 
     response = ""
     for chunk in client.chat.completions.create(
-        model=model,
+        model="deepseek-chat",
         messages=messages,
         max_tokens=2048,
-        stream=True
+        stream=True,
     ):
         if chunk.choices and chunk.choices[0].delta.content:
             response += chunk.choices[0].delta.content
@@ -42,5 +33,4 @@ demo = gr.ChatInterface(
     theme=gr.themes.Soft(),
 )
 
-if __name__ == "__main__":
-    demo.launch()
+demo.launch()
