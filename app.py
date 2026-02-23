@@ -35,10 +35,7 @@ def chat(message, history):
             yield response
 
 
-demo = gr.ChatInterface(
-    fn=chat,
-    title="Brain",
-    theme=gr.themes.Soft(),
-)
+with gr.Blocks(theme=gr.themes.Soft(), title="Brain") as demo:
+    gr.ChatInterface(fn=chat, title="Brain")
 
 demo.launch()
