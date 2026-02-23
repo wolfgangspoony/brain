@@ -1,124 +1,156 @@
 """
-RAG pipeline: index the NOTES directory and retrieve relevant chunks at query time.
+Agentic RAG pipeline using LlamaIndex.
+Indexes NOTES directory, creates a ReAct agent that can search
+and reason over the knowledge base with multi-step retrieval.
 """
-import re
+import os
+import sys
 from pathlib import Path
 
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
+from llama_index.core.tools import QueryEngineTool, ToolMetadata
+from llama_index.core.agent import ReActAgent
+from llama_index.core.storage import StorageContext
+from llama_index.llms.openai_like import OpenAILike
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.vector_stores.chroma import ChromaVectorStore
 import chromadb
-from sentence_transformers import SentenceTransformer
 
 NOTES_DIR = Path(__file__).parent / "NOTES"
 
+SYSTEM_PROMPT = """You are an intelligence system grounded in a specific personal knowledge base.
 
-class Knowledge:
-    def __init__(self):
-        self.model = None
-        self.collection = None
-        self._indexed = False
+RULES:
+1. ALWAYS search the knowledge base before answering. Never rely on general knowledge alone.
+2. If the user asks about multiple topics, search for EACH topic separately with separate tool calls.
+3. Show your reasoning: explain what you searched for, what you found, and how it connects.
+4. Cite the specific source file for every claim drawn from the notes.
+5. If the notes contain frameworks or patterns, apply them to analyze the query.
+6. Be direct. No filler. No hedging. Say what the notes say.
+7. If the notes don't cover something, say so clearly — don't fabricate.
+8. When synthesizing across multiple notes, identify the connections and patterns between them."""
 
-    def index(self):
-        """Load all notes, chunk them, embed them, store in ChromaDB."""
-        if self._indexed:
-            return
+TOOL_DESCRIPTION = (
+    "Search the user's personal knowledge base. Contains ~300 files covering: "
+    "political analysis, 'Secret History of Power' series, game theory, "
+    "AI criticism, Epstein research, cultural commentary, TikTok transcripts, "
+    "chat logs with Claude/ChatGPT/DeepSeek, conversations with friends, "
+    "and personal diary entries. "
+    "Call this tool MULTIPLE TIMES with DIFFERENT specific queries to cover "
+    "all aspects of a multi-topic question. Use specific topic names as queries."
+)
 
-        print("Loading embedding model...")
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
 
-        client = chromadb.Client()
-        self.collection = client.get_or_create_collection(
-            name="notes",
-            metadata={"hnsw:space": "cosine"},
-        )
+def build_agent():
+    """Build the full agentic RAG pipeline."""
 
-        if not NOTES_DIR.exists():
-            print(f"NOTES directory not found at {NOTES_DIR}")
-            self._indexed = True
-            return
+    # LLM — DeepSeek via OpenAI-compatible API
+    llm = OpenAILike(
+        model="deepseek-chat",
+        api_base="https://api.deepseek.com/v1",
+        api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+        is_chat_model=True,
+        context_window=64000,
+        max_tokens=2048,
+        temperature=0.7,
+    )
 
-        documents = []
-        metadatas = []
-        ids = []
+    # Embedding model
+    embed_model = HuggingFaceEmbedding(model_name="all-MiniLM-L6-v2")
 
-        file_count = 0
-        for path in NOTES_DIR.rglob("*"):
-            if path.suffix.lower() not in (".md", ".txt"):
-                continue
-            try:
-                content = path.read_text(encoding="utf-8", errors="ignore")
-                if not content.strip():
-                    continue
-                rel = str(path.relative_to(NOTES_DIR))
-                for i, chunk in enumerate(self._chunk(content, rel)):
-                    documents.append(chunk)
-                    metadatas.append({"source": rel})
-                    ids.append(f"{rel}::{i}")
-                file_count += 1
-            except Exception as e:
-                print(f"Skipping {path}: {e}")
+    # Global settings
+    Settings.llm = llm
+    Settings.embed_model = embed_model
 
-        if documents:
-            print(f"Embedding {len(documents)} chunks from {file_count} files...")
-            embeddings = self.model.encode(documents, show_progress_bar=True).tolist()
+    # Load documents
+    if not NOTES_DIR.exists():
+        print(f"WARNING: NOTES directory not found at {NOTES_DIR}")
+        return None
 
-            batch = 100
-            for i in range(0, len(documents), batch):
-                end = min(i + batch, len(documents))
-                self.collection.add(
-                    documents=documents[i:end],
-                    embeddings=embeddings[i:end],
-                    metadatas=metadatas[i:end],
-                    ids=ids[i:end],
-                )
-            print(f"Indexed {len(documents)} chunks. Ready.")
+    print("Loading documents from NOTES...")
+    documents = SimpleDirectoryReader(
+        str(NOTES_DIR),
+        recursive=True,
+        required_exts=[".md", ".txt"],
+    ).load_data()
+    print(f"Loaded {len(documents)} documents.")
 
-        self._indexed = True
+    # ChromaDB vector store (in-memory, re-indexes on cold start)
+    chroma_client = chromadb.Client()
+    chroma_collection = chroma_client.get_or_create_collection("notes")
+    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    def search(self, query, k=5):
-        """Find the k most relevant chunks for a query."""
-        if not self._indexed:
-            self.index()
-        if self.collection is None or self.collection.count() == 0:
-            return []
+    # Build index
+    print("Building vector index...")
+    index = VectorStoreIndex.from_documents(
+        documents,
+        storage_context=storage_context,
+        show_progress=True,
+    )
+    print("Index ready.")
 
-        emb = self.model.encode([query]).tolist()
-        results = self.collection.query(
-            query_embeddings=emb,
-            n_results=min(k, self.collection.count()),
-        )
+    # Query engine tool — the agent can call this as many times as it needs
+    query_engine = index.as_query_engine(similarity_top_k=15)
+    notes_tool = QueryEngineTool(
+        query_engine=query_engine,
+        metadata=ToolMetadata(
+            name="search_notes",
+            description=TOOL_DESCRIPTION,
+        ),
+    )
 
-        hits = []
-        if results and results["documents"]:
-            for i, doc in enumerate(results["documents"][0]):
-                hits.append({
-                    "content": doc,
-                    "source": results["metadatas"][0][i]["source"],
-                })
-        return hits
+    # ReAct agent — reasons before acting, can loop and branch
+    agent = ReActAgent.from_tools(
+        [notes_tool],
+        llm=llm,
+        verbose=True,
+        system_prompt=SYSTEM_PROMPT,
+        max_iterations=10,
+    )
 
-    @staticmethod
-    def _chunk(text, source, max_size=800):
-        """Split text into paragraph-based chunks with source context."""
-        stem = Path(source).stem
-        header = f"[Source: {stem}]\n\n"
-        paragraphs = re.split(r"\n\n+", text)
-        chunks = []
-        current = header
+    return agent
 
-        for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
-            if len(current) + len(para) > max_size and current != header:
-                chunks.append(current.strip())
-                current = header + para + "\n\n"
+
+def run_agent(agent, message):
+    """
+    Run the agent and capture reasoning trace.
+    Returns (reasoning_trace, final_response, sources).
+    """
+    import io
+
+    # Capture verbose output (the reasoning trace)
+    buffer = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = buffer
+
+    try:
+        response = agent.chat(message)
+    finally:
+        sys.stdout = old_stdout
+
+    reasoning = buffer.getvalue()
+
+    # Extract source files from tool outputs
+    sources = []
+    if response.sources:
+        for source in response.sources:
+            if hasattr(source, 'raw_input') and source.raw_input:
+                query = source.raw_input.get('input', 'N/A')
             else:
-                current += para + "\n\n"
+                query = 'N/A'
+            sources.append({
+                'tool': source.tool_name,
+                'query': query,
+            })
 
-        if current.strip() and current != header:
-            chunks.append(current.strip())
-
-        return chunks if chunks else [header + text[:max_size]]
+    return reasoning, str(response.response), sources
 
 
-# Global instance
-kb = Knowledge()
+# Build at startup
+print("Initializing agentic RAG pipeline...")
+agent = build_agent()
+if agent:
+    print("Agent ready.")
+else:
+    print("Agent failed to initialize.")

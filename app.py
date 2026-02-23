@@ -1,15 +1,5 @@
-import os
 import gradio as gr
-from huggingface_hub import InferenceClient
-from knowledge import kb
-
-client = InferenceClient(
-    base_url="https://api.deepseek.com/v1",
-    api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
-)
-
-# Index the knowledge base at startup
-kb.index()
+from knowledge import agent, run_agent
 
 
 def get_text(content):
@@ -21,39 +11,53 @@ def get_text(content):
     return str(content)
 
 
-SYSTEM_BASE = """You are a knowledgeable assistant with access to the user's personal knowledge base.
-When relevant context from their notes is provided below, use it to ground your responses.
-If your answer draws on their notes, mention which source it came from.
-If the notes don't cover the topic, just answer normally — don't pretend you have context you don't."""
-
-
 def chat(message, history):
     user_text = get_text(message)
 
-    # Retrieve relevant chunks from the knowledge base
-    hits = kb.search(user_text, k=15)
+    if agent is None:
+        return "Error: Agent failed to initialize. Check the logs."
 
-    system = SYSTEM_BASE
-    if hits:
-        context = "\n\n---\n\n".join(h["content"] for h in hits)
-        sources = ", ".join(set(h["source"] for h in hits))
-        system += f"\n\n=== RELEVANT CONTEXT FROM USER'S NOTES ===\n(Sources: {sources})\n\n{context}\n\n=== END CONTEXT ==="
+    try:
+        reasoning, response, sources = run_agent(agent, user_text)
 
-    messages = [{"role": "system", "content": system}]
-    for msg in history:
-        messages.append({"role": msg["role"], "content": get_text(msg["content"])})
-    messages.append({"role": "user", "content": user_text})
+        # Build output with reasoning trace
+        output = ""
 
-    response = ""
-    for chunk in client.chat.completions.create(
-        model="deepseek-chat",
-        messages=messages,
-        max_tokens=2048,
-        stream=True,
-    ):
-        if chunk.choices and chunk.choices[0].delta.content:
-            response += chunk.choices[0].delta.content
-            yield response
+        # Show search queries the agent made
+        if sources:
+            output += "**🔍 Search Trace:**\n"
+            for i, s in enumerate(sources):
+                output += f"- Query {i+1}: `{s['query']}`\n"
+            output += "\n"
+
+        # Show full reasoning trace (collapsed)
+        if reasoning.strip():
+            output += "**💭 Reasoning:**\n"
+            # Clean up the verbose output for readability
+            lines = reasoning.strip().split('\n')
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith('Thought:'):
+                    output += f"\n> **Thought:** {line[8:].strip()}\n"
+                elif line.startswith('Action:'):
+                    output += f"> **Action:** {line[7:].strip()}\n"
+                elif line.startswith('Observation:'):
+                    # Truncate long observations
+                    obs = line[12:].strip()
+                    if len(obs) > 300:
+                        obs = obs[:300] + "..."
+                    output += f"> **Observation:** {obs}\n"
+                elif line.startswith('Answer:'):
+                    pass  # Skip, we show the full response below
+            output += "\n---\n\n"
+
+        output += response
+        return output
+
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 
 with gr.Blocks(title="Brain") as demo:
