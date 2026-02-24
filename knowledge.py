@@ -4,12 +4,12 @@ Indexes NOTES directory, creates a ReAct agent that can search
 and reason over the knowledge base with multi-step retrieval.
 """
 import os
-import sys
 from pathlib import Path
 
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
 from llama_index.core.tools import QueryEngineTool, ToolMetadata
-from llama_index.core.agent import ReActAgent
+from llama_index.core.agent.workflow import ReActAgent
+from llama_index.core.workflow import Context
 from llama_index.core.storage import StorageContext
 from llama_index.llms.openai_like import OpenAILike
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
@@ -111,45 +111,11 @@ def build_agent():
     return agent
 
 
-def run_agent(agent, message):
-    """
-    Run the agent and capture reasoning trace.
-    Returns (reasoning_trace, final_response, sources).
-    """
-    import io
-
-    # Capture verbose output (the reasoning trace)
-    buffer = io.StringIO()
-    old_stdout = sys.stdout
-    sys.stdout = buffer
-
-    try:
-        response = agent.chat(message)
-    finally:
-        sys.stdout = old_stdout
-
-    reasoning = buffer.getvalue()
-
-    # Extract response text — handle both old and new response formats
-    if hasattr(response, 'response'):
-        final_text = str(response.response)
-    else:
-        final_text = str(response)
-
-    # Extract source files from tool outputs if available
-    sources = []
-    if hasattr(response, 'sources') and response.sources:
-        for source in response.sources:
-            if hasattr(source, 'raw_input') and source.raw_input:
-                query = source.raw_input.get('input', 'N/A')
-            else:
-                query = 'N/A'
-            sources.append({
-                'tool': getattr(source, 'tool_name', 'search_notes'),
-                'query': query,
-            })
-
-    return reasoning, final_text, sources
+async def run_agent_async(agent, message):
+    """Run the agent asynchronously. Returns the response string."""
+    ctx = Context(agent)
+    response = await agent.run(message, ctx=ctx)
+    return str(response)
 
 
 # Build at startup
