@@ -101,12 +101,11 @@ def build_agent():
     )
 
     # ReAct agent — reasons before acting, can loop and branch
-    agent = ReActAgent.from_tools(
-        [notes_tool],
+    agent = ReActAgent(
+        name="brain",
+        tools=[notes_tool],
         llm=llm,
-        verbose=True,
         system_prompt=SYSTEM_PROMPT,
-        max_iterations=10,
     )
 
     return agent
@@ -131,20 +130,26 @@ def run_agent(agent, message):
 
     reasoning = buffer.getvalue()
 
-    # Extract source files from tool outputs
+    # Extract response text — handle both old and new response formats
+    if hasattr(response, 'response'):
+        final_text = str(response.response)
+    else:
+        final_text = str(response)
+
+    # Extract source files from tool outputs if available
     sources = []
-    if response.sources:
+    if hasattr(response, 'sources') and response.sources:
         for source in response.sources:
             if hasattr(source, 'raw_input') and source.raw_input:
                 query = source.raw_input.get('input', 'N/A')
             else:
                 query = 'N/A'
             sources.append({
-                'tool': source.tool_name,
+                'tool': getattr(source, 'tool_name', 'search_notes'),
                 'query': query,
             })
 
-    return reasoning, str(response.response), sources
+    return reasoning, final_text, sources
 
 
 # Build at startup
