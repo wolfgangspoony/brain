@@ -167,6 +167,7 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                 label="Brain", 
                 height=500,
                 bubble_full_width=False,
+                value=[],  # Explicitly set initial value
             )
             msg = gr.Textbox(
                 placeholder="Type here...", 
@@ -188,31 +189,34 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
             status_text = gr.Markdown(status_msg)
 
             async def respond(message, history, session):
-                # Gradio 6.x format: list of [user_msg, bot_msg] tuples
-                history = history or []
-                
-                # Input validation
-                if not message or not message.strip():
-                    return "", history, session
-                
-                # Rate limiting
-                if not rate_limiter.is_allowed(session):
-                    history.append([message[:500], "⚠️ Please wait a moment before sending another message."])
-                    return "", history, session
-                
-                # Check system ready
-                if not DEEPSEEK_API_KEY:
-                    history.append([message[:500], "❌ Error: DEEPSEEK_API_KEY not configured."])
-                    return "", history, session
-                
-                if not search_tool:
-                    history.append([message[:500], "❌ Error: Knowledge index not available."])
-                    return "", history, session
-                
-                # Truncate display
-                display_message = message[:500] if len(message) > 500 else message
+                # Ensure history is list
+                if history is None:
+                    history = []
+                elif not isinstance(history, list):
+                    history = []
                 
                 try:
+                    # Input validation
+                    if not message or not message.strip():
+                        return "", history, session
+                    
+                    # Rate limiting
+                    if not rate_limiter.is_allowed(session):
+                        new_history = history + [[message[:500], "⚠️ Please wait a moment before sending another message."]]
+                        return "", new_history, session
+                    
+                    # Check system ready
+                    if not DEEPSEEK_API_KEY:
+                        new_history = history + [[message[:500], "❌ Error: DEEPSEEK_API_KEY not configured."]]
+                        return "", new_history, session
+                    
+                    if not search_tool:
+                        new_history = history + [[message[:500], "❌ Error: Knowledge index not available."]]
+                        return "", new_history, session
+                    
+                    # Truncate display
+                    display_message = message[:500] if len(message) > 500 else message
+                    
                     response, searches = await run_agent(
                         search_tool, message, shared_memory, DEEPSEEK_API_KEY
                     )
@@ -223,16 +227,16 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                         search_info = f"🔍 {', '.join(searches)}\n\n"
                         display_response = search_info + response
                     
-                    # Gradio 6.x format: append [user_msg, bot_msg]
-                    history.append([display_message, display_response])
-                    return "", history, session
+                    # Create new history list
+                    new_history = history + [[display_message, display_response]]
+                    return "", new_history, session
                     
                 except Exception as e:
                     import traceback
                     error_detail = traceback.format_exc()
-                    print(f"Error in respond: {error_detail}")
-                    history.append([display_message, f"❌ Error: {str(e)}"])
-                    return "", history, session
+                    print(f"ERROR in respond: {error_detail}")
+                    new_history = history + [[str(message)[:500], f"❌ Error: {str(e)}"]]
+                    return "", new_history, session
 
             def clear_chat():
                 return []
