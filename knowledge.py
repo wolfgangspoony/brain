@@ -19,16 +19,11 @@ import chromadb
 NOTES_DIR = Path(__file__).parent / "KNOWLEDGE"
 MEMORY_FILE = Path(__file__).parent / "memory.json"
 
-# If on HF Spaces, try to use persistent storage
+# If on HF Spaces with persistent storage, use /data
 if os.environ.get("SPACE_ID"):
     persistent = Path("/data")
-    try:
-        persistent.mkdir(parents=True, exist_ok=True)
+    if persistent.exists():
         MEMORY_FILE = persistent / "memory.json"
-        print(f"Using persistent storage: {MEMORY_FILE}")
-    except Exception as e:
-        print(f"Could not use /data, falling back to local: {e}")
-        print("Enable persistent storage in Space settings for conversations to survive rebuilds.")
 
 
 TOOL_DESCRIPTION = (
@@ -63,14 +58,13 @@ def record_exchange(memory, user_msg, agent_response, searches):
     exchange = {
         "timestamp": datetime.now().isoformat(),
         "user": user_msg,
-        "agent": agent_response,  # save full response
+        "agent": agent_response,
         "searches": searches,
     }
 
     if not memory.get("sessions"):
         memory["sessions"] = []
 
-    # Keep last 50 exchanges
     memory["sessions"].append(exchange)
     if len(memory["sessions"]) > 50:
         memory["sessions"] = memory["sessions"][-50:]
@@ -83,7 +77,7 @@ def get_memory_context(memory):
     if not memory.get("sessions"):
         return ""
 
-    recent = memory["sessions"][-5:]  # last 5 exchanges
+    recent = memory["sessions"][-5:]
     lines = ["Earlier in this conversation:"]
     for ex in recent:
         lines.append(f"User: {ex['user']}")
@@ -156,11 +150,7 @@ def build_agent():
 
 
 async def run_with_trace(agent, ctx, message, memory):
-    """
-    Run the agent with full reasoning trace capture.
-    Returns (reasoning_parts, final_response, searches).
-    """
-    # Inject memory context into the message if we have history
+    """Run the agent and capture response."""
     mem_context = get_memory_context(memory)
     augmented = message
     if mem_context:
@@ -187,7 +177,6 @@ async def run_with_trace(agent, ctx, message, memory):
     if not final_text:
         final_text = str(response)
 
-    # Record to persistent memory
     record_exchange(memory, message, final_text, searches)
 
     return reasoning_parts, final_text, searches
