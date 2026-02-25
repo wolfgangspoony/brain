@@ -19,11 +19,16 @@ import chromadb
 NOTES_DIR = Path(__file__).parent / "NOTES"
 MEMORY_FILE = Path(__file__).parent / "memory.json"
 
-# If on HF Spaces with persistent storage, use /data
+# If on HF Spaces, try to use persistent storage
 if os.environ.get("SPACE_ID"):
     persistent = Path("/data")
-    if persistent.exists():
+    try:
+        persistent.mkdir(parents=True, exist_ok=True)
         MEMORY_FILE = persistent / "memory.json"
+        print(f"Using persistent storage: {MEMORY_FILE}")
+    except Exception as e:
+        print(f"Could not use /data, falling back to local: {e}")
+        print("Enable persistent storage in Space settings for conversations to survive rebuilds.")
 
 
 TOOL_DESCRIPTION = (
