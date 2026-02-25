@@ -1,47 +1,161 @@
 """
-Brain.
+Brain - Clean DeepSeek Integration
 """
 import os
 import json
+import asyncio
 from pathlib import Path
 from datetime import datetime
+from typing import List, Dict, Tuple
+import httpx
 
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
-from llama_index.core.tools import QueryEngineTool, ToolMetadata
-from llama_index.core.agent.workflow import ReActAgent, AgentStream, ToolCallResult
-from llama_index.core.workflow import Context
-from llama_index.core.storage import StorageContext
-from llama_index.llms.openai_like import OpenAILike
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.core.storage import StorageContext
 import chromadb
 
-NOTES_DIR = Path(__file__).parent / "KNOWLEDGE"
+# Paths
+KNOWLEDGE_DIR = Path(__file__).parent / "KNOWLEDGE"
 MEMORY_FILE = Path(__file__).parent / "memory.json"
+CHROMA_DIR = Path(__file__).parent / ".chroma"
 
-# If on HF Spaces with persistent storage, use /data
+# HF Spaces persistent storage
 if os.environ.get("SPACE_ID"):
     persistent = Path("/data")
     if persistent.exists():
         MEMORY_FILE = persistent / "memory.json"
+        CHROMA_DIR = persistent / ".chroma"
+
+DEEPSEEK_API_KEY = ""
+_search_index = None
+_memory_cache = None
 
 
-TOOL_DESCRIPTION = (
-    "Search the notes. Contains political analysis, power structures research, "
-    "cultural commentary, personal conversations, diary entries."
-)
-
-
-# === PERSISTENT MEMORY ===
-
-def load_memory():
-    """Load persistent memory from disk."""
-    if MEMORY_FILE.exists():
+def get_api_key() -> str:
+    """Get DeepSeek API key from environment or file."""
+    global DEEPSEEK_API_KEY
+    
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if api_key:
+        DEEPSEEK_API_KEY = api_key
+        return api_key
+    
+    key_file = Path(__file__).parent / "DEEPSEEK_API_KEY.txt"
+    if key_file.exists():
         try:
-            return json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+            api_key = key_file.read_text(encoding="utf-8").strip()
+            if api_key:
+                DEEPSEEK_API_KEY = api_key
+                return api_key
         except Exception:
             pass
-    return {"sessions": [], "insights": []}
+    return ""
+
+
+# === VECTOR SEARCH ===
+
+def get_or_build_index():
+    """Get existing index or build new one. Persists to disk."""
+    global _search_index
+    
+    if _search_index is not None:
+        return _search_index
+    
+    embed_model = HuggingFaceEmbedding(model_name="all-MiniLM-L6-v2")
+    Settings.embed_model = embed_model
+    
+    if not KNOWLEDGE_DIR.exists():
+        print(f"WARNING: KNOWLEDGE directory not found at {KNOWLEDGE_DIR}")
+        return None
+    
+    # Try to load existing persistent index
+    if CHROMA_DIR.exists():
+        try:
+            print("Loading existing vector index...")
+            chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+            chroma_collection = chroma_client.get_or_create_collection("knowledge")
+            vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+            storage_context = StorageContext.from_defaults(vector_store=vector_store)
+            _search_index = VectorStoreIndex.from_vector_store(
+                vector_store, storage_context=storage_context
+            )
+            print("Index loaded from disk.")
+            return _search_index
+        except Exception as e:
+            print(f"Could not load existing index: {e}")
+            print("Rebuilding index...")
+    
+    # Build new index
+    print("Loading documents from KNOWLEDGE...")
+    documents = SimpleDirectoryReader(
+        str(KNOWLEDGE_DIR),
+        recursive=True,
+        required_exts=[".md", ".txt"],
+    ).load_data()
+    print(f"Loaded {len(documents)} documents.")
+    
+    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+    chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    chroma_collection = chroma_client.get_or_create_collection("knowledge")
+    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    
+    print("Building vector index...")
+    _search_index = VectorStoreIndex.from_documents(
+        documents,
+        storage_context=storage_context,
+        show_progress=True,
+    )
+    print("Index ready and saved to disk.")
+    
+    return _search_index
+
+
+class SearchTool:
+    """Simple search tool that persists its query engine."""
+    
+    def __init__(self, index, top_k: int = 10):
+        self.index = index
+        self.query_engine = None
+        self.top_k = top_k
+    
+    def search(self, query: str) -> List[str]:
+        """Search notes and return relevant text chunks."""
+        if self.index is None:
+            return []
+        
+        if self.query_engine is None:
+            self.query_engine = self.index.as_query_engine(similarity_top_k=self.top_k)
+        
+        response = self.query_engine.query(query)
+        
+        results = []
+        if hasattr(response, 'source_nodes'):
+            for node in response.source_nodes:
+                results.append(node.node.text)
+        
+        return results
+
+
+# === MEMORY ===
+
+def load_memory():
+    """Load persistent memory from disk with caching."""
+    global _memory_cache
+    
+    if _memory_cache is not None:
+        return _memory_cache
+    
+    if MEMORY_FILE.exists():
+        try:
+            _memory_cache = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+            return _memory_cache
+        except Exception:
+            pass
+    
+    _memory_cache = {"sessions": []}
+    return _memory_cache
 
 
 def save_memory(memory):
@@ -53,7 +167,7 @@ def save_memory(memory):
         print(f"Warning: Could not save memory: {e}")
 
 
-def record_exchange(memory, user_msg, agent_response, searches):
+def record_exchange(memory, user_msg: str, agent_response: str, searches: List[str]):
     """Record a conversation exchange to persistent memory."""
     exchange = {
         "timestamp": datetime.now().isoformat(),
@@ -61,160 +175,141 @@ def record_exchange(memory, user_msg, agent_response, searches):
         "agent": agent_response,
         "searches": searches,
     }
-
-    if not memory.get("sessions"):
+    
+    if "sessions" not in memory:
         memory["sessions"] = []
-
+    
     memory["sessions"].append(exchange)
-    if len(memory["sessions"]) > 50:
-        memory["sessions"] = memory["sessions"][-50:]
-
+    
+    # Keep last 100 sessions
+    if len(memory["sessions"]) > 100:
+        memory["sessions"] = memory["sessions"][-100:]
+    
     save_memory(memory)
 
 
-def get_memory_context(memory):
-    """Build a memory context string from recent sessions."""
+def get_recent_history(memory, n: int = 3) -> List[Dict]:
+    """Get recent conversation history as structured list."""
     if not memory.get("sessions"):
-        return ""
-
-    recent = memory["sessions"][-5:]
-    lines = ["Earlier in this conversation:"]
-    for ex in recent:
-        lines.append(f"User: {ex['user']}")
-        lines.append(f"Response: {ex['agent']}")
-        lines.append("")
-    return "\n".join(lines)
+        return []
+    return memory["sessions"][-n:]
 
 
-# === BUILD AGENT ===
+# === DEEPSEEK API ===
 
-def get_api_key():
-    """Get DeepSeek API key from environment or file."""
-    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-    if api_key:
-        return api_key
+async def call_deepseek_chat(
+    messages: List[Dict[str, str]],
+    api_key: str,
+    temperature: float = 0.7,
+    max_tokens: int = 2048,
+) -> str:
+    """Call DeepSeek API directly."""
     
-    # Try to read from file
-    key_file = Path(__file__).parent / "DEEPSEEK_API_KEY.txt"
-    if key_file.exists():
-        try:
-            api_key = key_file.read_text(encoding="utf-8").strip()
-            if api_key:
-                return api_key
-        except Exception:
-            pass
-    return ""
-
-
-def build_agent():
-    """Build the full agentic pipeline."""
+    url = "https://api.deepseek.com/v1/chat/completions"
     
-    api_key = get_api_key()
-    if not api_key:
-        print("ERROR: DEEPSEEK_API_KEY not found in environment or DEEPSEEK_API_KEY.txt")
-        return None
-
-    llm = OpenAILike(
-        model="deepseek-chat",
-        api_base="https://api.deepseek.com/v1",
-        api_key=api_key,
-        is_chat_model=True,
-        context_window=64000,
-        max_tokens=2048,
-        temperature=0.7,
-    )
-
-    embed_model = HuggingFaceEmbedding(model_name="all-MiniLM-L6-v2")
-
-    Settings.llm = llm
-    Settings.embed_model = embed_model
-
-    if not NOTES_DIR.exists():
-        print(f"WARNING: KNOWLEDGE directory not found at {NOTES_DIR}")
-        return None
-
-    print("Loading documents from KNOWLEDGE...")
-    documents = SimpleDirectoryReader(
-        str(NOTES_DIR),
-        recursive=True,
-        required_exts=[".md", ".txt"],
-    ).load_data()
-    print(f"Loaded {len(documents)} documents.")
-
-    chroma_client = chromadb.Client()
-    chroma_collection = chroma_client.get_or_create_collection("notes")
-    vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-    print("Building vector index...")
-    index = VectorStoreIndex.from_documents(
-        documents,
-        storage_context=storage_context,
-        show_progress=True,
-    )
-    print("Index ready.")
-
-    query_engine = index.as_query_engine(similarity_top_k=15)
-    notes_tool = QueryEngineTool(
-        query_engine=query_engine,
-        metadata=ToolMetadata(
-            name="search_notes",
-            description=TOOL_DESCRIPTION,
-        ),
-    )
-
-    agent = ReActAgent(
-        name="brain",
-        tools=[notes_tool],
-        llm=llm,
-    )
-
-    return agent
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    
+    payload = {
+        "model": "deepseek-chat",
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=payload, timeout=60.0)
+        response.raise_for_status()
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
 
 
-async def run_with_trace(agent, ctx, message, memory):
-    """Run the agent and capture response."""
-    mem_context = get_memory_context(memory)
-    augmented = message
-    if mem_context:
-        augmented = f"{mem_context}\n\n{message}"
+# === AGENT LOGIC ===
 
-    handler = agent.run(augmented, ctx=ctx)
+SYSTEM_PROMPT = """You are a direct, analytical conversational partner. You have access to a search tool for querying your knowledge base of notes, transcripts, and conversations.
 
-    reasoning_parts = []
+To search, output exactly: SEARCH: <query>
+Example: SEARCH: CIA occult programs
+
+Guidelines:
+- Search when you need specific facts from your notes
+- Don't mirror the user's language patterns
+- Have your own ideas and disagree when appropriate
+- Be concise and direct"""
+
+
+async def run_agent(
+    search_tool: SearchTool,
+    message: str,
+    memory: Dict,
+    api_key: str,
+) -> Tuple[str, List[str]]:
+    """Run the agent with search capability."""
+    
+    # Build message history (last 3 exchanges for context)
+    history = get_recent_history(memory, n=3)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    
+    # Add history as separate messages
+    for ex in history:
+        messages.append({"role": "user", "content": ex["user"]})
+        messages.append({"role": "assistant", "content": ex["agent"]})
+    
+    # Add current message
+    messages.append({"role": "user", "content": message})
+    
+    # First call - see if agent wants to search
     searches = []
-    final_text = ""
+    response_text = await call_deepseek_chat(messages, api_key)
+    
+    # Check if search is needed
+    if response_text.strip().upper().startswith("SEARCH:"):
+        # Extract search query
+        search_query = response_text.strip()[7:].strip()
+        searches.append(search_query)
+        
+        # Perform search
+        search_results = search_tool.search(search_query)
+        
+        # Build search context
+        if search_results:
+            search_context = "=== SEARCH RESULTS ===\n\n"
+            for i, result in enumerate(search_results[:5], 1):  # Top 5 results
+                search_context += f"[{i}] {result[:800]}...\n\n"
+        else:
+            search_context = "=== SEARCH RESULTS ===\nNo relevant results found.\n"
+        
+        # Add the search flow to conversation
+        messages.append({"role": "assistant", "content": response_text})
+        messages.append({"role": "user", "content": search_context})
+        
+        # Second call with search results
+        response_text = await call_deepseek_chat(messages, api_key)
+    
+    # Record to memory
+    record_exchange(memory, message, response_text, searches)
+    
+    return response_text, searches
 
-    async for ev in handler.stream_events():
-        if isinstance(ev, AgentStream):
-            final_text += ev.delta
-        elif isinstance(ev, ToolCallResult):
-            searches.append(ev.tool_name)
-            reasoning_parts.append({
-                "type": "tool_call",
-                "tool": ev.tool_name,
-                "result_preview": str(ev.tool_output.content)[:300] if ev.tool_output else "N/A",
-            })
 
-    response = await handler
-    if not final_text:
-        final_text = str(response)
+# === LAZY INITIALIZATION ===
 
-    record_exchange(memory, message, final_text, searches)
-
-    return reasoning_parts, final_text, searches
+def init():
+    """Initialize everything. Call this explicitly instead of at import."""
+    global _search_index, _memory_cache
+    
+    get_api_key()
+    
+    if _memory_cache is None:
+        _memory_cache = load_memory()
+    
+    if _search_index is None:
+        _search_index = get_or_build_index()
+    
+    return _search_index, _memory_cache
 
 
-# === STARTUP ===
-
-print("Starting up...")
-agent = build_agent()
-memory = load_memory()
-
-if agent:
-    agent_ctx = Context(agent)
-    session_count = len(memory.get("sessions", []))
-    print(f"Ready. {session_count} prior exchanges loaded.")
-else:
-    agent_ctx = None
-    print("Failed to start.")
+# Don't auto-init on import - let app.py call init()
+print("Brain module loaded. Call init() to start.")
