@@ -16,7 +16,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.vector_stores.chroma import ChromaVectorStore
 import chromadb
 
-NOTES_DIR = Path(__file__).parent / "NOTES"
+NOTES_DIR = Path(__file__).parent / "KNOWLEDGE"
 MEMORY_FILE = Path(__file__).parent / "memory.json"
 
 # If on HF Spaces, try to use persistent storage
