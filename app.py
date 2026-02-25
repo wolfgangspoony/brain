@@ -189,7 +189,7 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
             status_text = gr.Markdown(status_msg)
 
             async def respond(message, history, session):
-                # Ensure history is list
+                # Gradio 6.x uses list of dicts format for Chatbot
                 if history is None:
                     history = []
                 elif not isinstance(history, list):
@@ -200,22 +200,30 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                     if not message or not message.strip():
                         return "", history, session
                     
+                    display_message = message[:500] if len(message) > 500 else message
+                    
                     # Rate limiting
                     if not rate_limiter.is_allowed(session):
-                        new_history = history + [[message[:500], "⚠️ Please wait a moment before sending another message."]]
+                        new_history = history + [
+                            {"role": "user", "content": display_message},
+                            {"role": "assistant", "content": "⚠️ Please wait a moment before sending another message."}
+                        ]
                         return "", new_history, session
                     
                     # Check system ready
                     if not DEEPSEEK_API_KEY:
-                        new_history = history + [[message[:500], "❌ Error: DEEPSEEK_API_KEY not configured."]]
+                        new_history = history + [
+                            {"role": "user", "content": display_message},
+                            {"role": "assistant", "content": "❌ Error: DEEPSEEK_API_KEY not configured."}
+                        ]
                         return "", new_history, session
                     
                     if not search_tool:
-                        new_history = history + [[message[:500], "❌ Error: Knowledge index not available."]]
+                        new_history = history + [
+                            {"role": "user", "content": display_message},
+                            {"role": "assistant", "content": "❌ Error: Knowledge index not available."}
+                        ]
                         return "", new_history, session
-                    
-                    # Truncate display
-                    display_message = message[:500] if len(message) > 500 else message
                     
                     response, searches = await run_agent(
                         search_tool, message, shared_memory, DEEPSEEK_API_KEY
@@ -227,19 +235,25 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                         search_info = f"🔍 {', '.join(searches)}\n\n"
                         display_response = search_info + response
                     
-                    # Create new history list
-                    new_history = history + [[display_message, display_response]]
+                    # Gradio 6.x format: list of dicts with role and content
+                    new_history = history + [
+                        {"role": "user", "content": display_message},
+                        {"role": "assistant", "content": display_response}
+                    ]
                     return "", new_history, session
                     
                 except Exception as e:
                     import traceback
                     error_detail = traceback.format_exc()
                     print(f"ERROR in respond: {error_detail}")
-                    new_history = history + [[str(message)[:500], f"❌ Error: {str(e)}"]]
+                    new_history = history + [
+                        {"role": "user", "content": str(message)[:500]},
+                        {"role": "assistant", "content": f"❌ Error: {str(e)}"}
+                    ]
                     return "", new_history, session
 
             def clear_chat():
-                return []
+                return []  # Return empty list for Gradio 6.x Chatbot
 
             send_btn.click(
                 respond, 
