@@ -1,5 +1,4 @@
 import gradio as gr
-import json
 from knowledge import agent, agent_ctx, memory, run_with_trace, MEMORY_FILE, load_memory
 
 PIN = "1969"

@@ -113,10 +113,10 @@ def build_agent():
     Settings.embed_model = embed_model
 
     if not NOTES_DIR.exists():
-        print(f"WARNING: NOTES directory not found at {NOTES_DIR}")
+        print(f"WARNING: KNOWLEDGE directory not found at {NOTES_DIR}")
         return None
 
-    print("Loading documents from NOTES...")
+    print("Loading documents from KNOWLEDGE...")
     documents = SimpleDirectoryReader(
         str(NOTES_DIR),
         recursive=True,

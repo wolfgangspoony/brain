@@ -30,8 +30,9 @@ Thumbs.db
 # Claude Code
 .claude/
 
-# Local knowledge (this is runtime data)
-KNOWLEDGE/
+# Conversation memory (runtime, not tracked)
+memory.json
 
 # Misc
 nul
+*.zip
