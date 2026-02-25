@@ -1,6 +1,7 @@
 import gradio as gr
 import json
 import shutil
+import tempfile
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -8,7 +9,7 @@ from pathlib import Path
 from knowledge import (
     run_agent, 
     load_memory, 
-    reload_memory,
+    reload_memory_sync,
     get_or_build_index,
     SearchTool,
     MEMORY_FILE,
@@ -105,9 +106,6 @@ async def load_history():
 
 def export_memory():
     """Export memory.json for download."""
-    import tempfile
-    import shutil
-    
     if not MEMORY_FILE.exists():
         return None
     
@@ -144,7 +142,7 @@ def import_memory(file):
         shutil.copy(uploaded_path, MEMORY_FILE)
         
         # Reload memory from disk
-        shared_memory = reload_memory()
+        shared_memory = reload_memory_sync()
         
         session_count = len(shared_memory.get("sessions", []))
         return f"✅ Memory imported successfully! {session_count} sessions loaded."
@@ -278,8 +276,8 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                     interactive=False,
                     show_copy_button=True,
                 )
-                # Hidden file component for download
-                export_file = gr.File(label="Download", visible=False)
+                # File component for download
+                export_file = gr.File(label="Download Memory")
 
             def lock_history():
                 return gr.update(visible=False), gr.update(visible=True), ""

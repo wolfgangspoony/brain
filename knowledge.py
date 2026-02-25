@@ -453,11 +453,27 @@ def init():
     return _search_index, _memory_cache
 
 
-def reload_memory():
-    """Force reload memory from disk."""
+def reload_memory_sync():
+    """Force reload memory from disk (synchronous version for non-async contexts)."""
     global _memory_cache
     _memory_cache = None
-    return load_memory()
+    
+    if MEMORY_FILE.exists():
+        try:
+            _memory_cache = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+            return _memory_cache
+        except Exception:
+            pass
+    
+    _memory_cache = {"sessions": []}
+    return _memory_cache
+
+
+async def reload_memory():
+    """Force reload memory from disk (async version)."""
+    global _memory_cache
+    _memory_cache = None
+    return await load_memory()
 
 
 print("Brain module loaded.")
