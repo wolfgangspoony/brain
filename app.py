@@ -1,6 +1,6 @@
 import gradio as gr
 import json
-from knowledge import agent, agent_ctx, memory, run_with_trace, MEMORY_FILE
+from knowledge import agent, agent_ctx, memory, run_with_trace, MEMORY_FILE, load_memory
 
 PIN = "1969"
 
@@ -38,93 +38,30 @@ def check_pin(pin_input):
 
 
 def load_history():
-    if not MEMORY_FILE.exists():
-        return "No conversation history yet."
+    # Reload from disk to get latest
+    current_memory = load_memory()
+    sessions = current_memory.get("sessions", [])
 
-    try:
-        data = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
-        sessions = data.get("sessions", [])
+    if not sessions:
+        return f"No conversation history yet.\n\nLooking at: {MEMORY_FILE}\nExists: {MEMORY_FILE.exists()}"
 
-        if not sessions:
-            return "No conversation history yet."
+    output = []
+    for i, ex in enumerate(sessions):
+        timestamp = ex.get("timestamp", "?")
+        user_msg = ex.get("user", "")
+        agent_msg = ex.get("agent", "")
+        output.append(f"[{i+1}] {timestamp}")
+        output.append(f"You: {user_msg}")
+        output.append(f"Brain: {agent_msg}")
+        output.append("-" * 40)
 
-        output = []
-        for i, ex in enumerate(sessions):
-            timestamp = ex.get("timestamp", "?")
-            user_msg = ex.get("user", "")
-            agent_msg = ex.get("agent", "")
-            output.append(f"--- Exchange {i+1} [{timestamp}] ---")
-            output.append(f"User: {user_msg}")
-            output.append(f"Response: {agent_msg}")
-            output.append("")
-
-        return "\n".join(output)
-    except Exception as e:
-        return f"Error loading history: {e}"
-
-
-def load_history_for_chat():
-    """Load conversation history as chat format for resuming."""
-    if not MEMORY_FILE.exists():
-        return []
-
-    try:
-        data = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
-        sessions = data.get("sessions", [])
-
-        if not sessions:
-            return []
-
-        # Convert to Gradio chat format: list of [user, assistant] pairs
-        history = []
-        for ex in sessions:
-            user_msg = ex.get("user", "")
-            agent_msg = ex.get("agent", "")
-            history.append([user_msg, agent_msg])
-
-        return history
-    except Exception:
-        return []
+    return "\n".join(output)
 
 
 with gr.Blocks(title="Brain") as demo:
     with gr.Tabs():
         with gr.TabItem("Chat"):
-            chatbot = gr.Chatbot(label="Brain", height=500)
-            msg = gr.Textbox(label="Message", placeholder="Type here...")
-            with gr.Row():
-                submit_btn = gr.Button("Send")
-                resume_btn = gr.Button("Resume Previous Conversation")
-                clear_btn = gr.Button("Clear")
-
-            async def respond(message, history):
-                if not message.strip():
-                    return "", history
-
-                if agent is None or agent_ctx is None:
-                    history.append([message, "Error: System failed to initialize."])
-                    return "", history
-
-                try:
-                    reasoning, response, searches = await run_with_trace(
-                        agent, agent_ctx, message, memory
-                    )
-                    history.append([message, response])
-                    return "", history
-                except Exception as e:
-                    history.append([message, f"Error: {str(e)}"])
-                    return "", history
-
-            def resume_conversation():
-                return load_history_for_chat()
-
-            def clear_chat():
-                return []
-
-            submit_btn.click(respond, [msg, chatbot], [msg, chatbot])
-            msg.submit(respond, [msg, chatbot], [msg, chatbot])
-            resume_btn.click(resume_conversation, outputs=[chatbot])
-            clear_btn.click(clear_chat, outputs=[chatbot])
+            gr.ChatInterface(fn=chat, title="Brain")
 
         with gr.TabItem("History"):
             with gr.Column(visible=True) as pin_section:
