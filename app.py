@@ -1,5 +1,7 @@
 import gradio as gr
 import time
+import uuid
+from datetime import datetime, timedelta
 from knowledge import (
     run_agent, 
     load_memory, 
@@ -8,32 +10,61 @@ from knowledge import (
     MEMORY_FILE,
     DEEPSEEK_API_KEY,
     init,
+    init_async,
     MAX_MESSAGE_LENGTH,
 )
 
 PIN = "1969"
 
-# Initialize on startup
+# Initialize on startup (sync version for module load)
 print("Initializing Brain...")
 index, shared_memory = init()
 search_tool = SearchTool(index, top_k=10) if index else None
 print(f"API Key configured: {bool(DEEPSEEK_API_KEY)}")
 print(f"Index loaded: {bool(index)}")
 
-# Rate limiting storage
-_last_request_time = {}
-MIN_REQUEST_INTERVAL = 1.0  # Seconds between requests per session
+
+class RateLimiter:
+    """Rate limiter with automatic cleanup of old entries."""
+    
+    def __init__(self, min_interval: float = 1.0, cleanup_interval: int = 100):
+        self.min_interval = min_interval
+        self._requests = {}
+        self._cleanup_counter = 0
+        self._cleanup_interval = cleanup_interval
+    
+    def is_allowed(self, session_id: str) -> bool:
+        """Check if request is allowed and record it."""
+        if not session_id:
+            return True  # Allow if no session (shouldn't happen)
+        
+        now = time.time()
+        
+        # Periodic cleanup
+        self._cleanup_counter += 1
+        if self._cleanup_counter >= self._cleanup_interval:
+            self._cleanup(now)
+            self._cleanup_counter = 0
+        
+        # Check rate limit
+        if session_id in self._requests:
+            elapsed = now - self._requests[session_id]
+            if elapsed < self.min_interval:
+                return False
+        
+        self._requests[session_id] = now
+        return True
+    
+    def _cleanup(self, now: float):
+        """Remove entries older than 5 minutes."""
+        cutoff = now - 300  # 5 minutes
+        old_keys = [k for k, v in self._requests.items() if v < cutoff]
+        for k in old_keys:
+            del self._requests[k]
 
 
-def check_rate_limit(session_id: str) -> bool:
-    """Check if session is rate limited."""
-    now = time.time()
-    if session_id in _last_request_time:
-        elapsed = now - _last_request_time[session_id]
-        if elapsed < MIN_REQUEST_INTERVAL:
-            return False
-    _last_request_time[session_id] = now
-    return True
+# Global rate limiter
+rate_limiter = RateLimiter(min_interval=1.0)
 
 
 def check_pin(pin_input):
@@ -45,16 +76,16 @@ def check_pin(pin_input):
     return gr.update(visible=False), gr.update(visible=True), "Wrong PIN"
 
 
-def load_history():
+async def load_history():
     """Load conversation history for display."""
     try:
-        current_memory = load_memory()
-        sessions = current_memory.get("sessions", [])
+        mem = await load_memory()
+        sessions = mem.get("sessions", [])
         if not sessions:
             return "No conversation history yet."
         
         output = []
-        for i, ex in enumerate(reversed(sessions[-50:])):  # Last 50 only for display
+        for i, ex in enumerate(reversed(sessions[-50:])):
             output.append(f"[{len(sessions)-i}] {ex.get('timestamp', '?')}")
             user_text = ex.get('user', '')[:200]
             agent_text = ex.get('agent', '')[:500]
@@ -68,11 +99,16 @@ def load_history():
         return f"Error loading history: {str(e)}"
 
 
-with gr.Blocks(title="Brain") as demo:
+def generate_session_id():
+    """Generate unique session ID."""
+    return str(uuid.uuid4())
+
+
+with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
     gr.Markdown("# 🧠 Brain")
     
-    # Session state
-    session_id = gr.State(value=lambda: str(time.time()))
+    # Session state - initialized once per browser session
+    session_id = gr.State(generate_session_id)
     
     with gr.Tabs():
         with gr.TabItem("Chat"):
@@ -101,28 +137,31 @@ with gr.Blocks(title="Brain") as demo:
             status_text = gr.Markdown(status_msg)
 
             async def respond(message, history, session):
+                # Ensure async init happened
+                global search_tool, shared_memory
+                if search_tool is None and index is not None:
+                    search_tool = SearchTool(index, top_k=10)
+                
                 # Input validation
                 if not message or not message.strip():
                     return "", history, session
                 
                 # Rate limiting
-                if not check_rate_limit(session):
-                    history.append([message, "⚠️ Please wait a moment before sending another message."])
+                if not rate_limiter.is_allowed(session):
+                    history.append([message[:500], "⚠️ Please wait a moment before sending another message."])
                     return "", history, session
                 
                 # Check system ready
                 if not DEEPSEEK_API_KEY:
-                    history.append([message, "❌ Error: DEEPSEEK_API_KEY not configured."])
+                    history.append([message[:500], "❌ Error: DEEPSEEK_API_KEY not configured."])
                     return "", history, session
                 
                 if not search_tool:
-                    history.append([message, "❌ Error: Knowledge index not available."])
+                    history.append([message[:500], "❌ Error: Knowledge index not available."])
                     return "", history, session
                 
-                # Truncate display in chat if needed
-                display_message = message
-                if len(message) > 500:
-                    display_message = message[:500] + "..."
+                # Truncate display
+                display_message = message[:500] if len(message) > 500 else message
                 
                 try:
                     response, searches = await run_agent(
@@ -203,7 +242,11 @@ with gr.Blocks(title="Brain") as demo:
             pin_btn.click(lambda: "", outputs=[pin_input])
 
 if __name__ == "__main__":
+    demo.queue(
+        default_concurrency_limit=5,
+        api_open=False,  # Disable API access
+    )
     demo.launch(
-        theme=gr.themes.Soft(),
         show_error=True,
+        show_api=False,
     )
