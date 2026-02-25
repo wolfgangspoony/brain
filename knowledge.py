@@ -3,6 +3,7 @@ Brain.
 """
 import os
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -35,6 +36,9 @@ TOOL_DESCRIPTION = (
     "Search the notes. Contains political analysis, power structures research, "
     "cultural commentary, personal conversations, diary entries."
 )
+
+# Minimal prompt - just enough to prevent reasoning leakage
+SYSTEM_PROMPT = "Respond directly to the user. Do not show your thinking process, tool calls, or reasoning steps - just give your response."
 
 
 # === PERSISTENT MEMORY ===
@@ -150,6 +154,7 @@ def build_agent():
         name="brain",
         tools=[notes_tool],
         llm=llm,
+        system_prompt=SYSTEM_PROMPT,
     )
 
     return agent
@@ -186,6 +191,13 @@ async def run_with_trace(agent, ctx, message, memory):
     response = await handler
     if not final_text:
         final_text = str(response)
+
+    # Strip any leaked reasoning patterns
+    final_text = re.sub(r'Thought:.*?(?=Action:|Answer:|$)', '', final_text, flags=re.DOTALL)
+    final_text = re.sub(r'Action:.*?(?=Action Input:|$)', '', final_text, flags=re.DOTALL)
+    final_text = re.sub(r'Action Input:.*?(?=Thought:|Answer:|$)', '', final_text, flags=re.DOTALL)
+    final_text = re.sub(r'^Answer:\s*', '', final_text.strip())
+    final_text = final_text.strip()
 
     # Record to persistent memory
     record_exchange(memory, message, final_text, searches)
