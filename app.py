@@ -27,7 +27,7 @@ def load_history():
 with gr.Blocks(title="Brain") as demo:
     with gr.Tabs():
         with gr.TabItem("Chat"):
-            chatbot = gr.Chatbot(label="Brain", height=500, type="messages")
+            chatbot = gr.Chatbot(label="Brain", height=500)
             msg = gr.Textbox(placeholder="Type here...", show_label=False)
             send_btn = gr.Button("Send")
 
@@ -35,19 +35,16 @@ with gr.Blocks(title="Brain") as demo:
                 if not message.strip():
                     return "", history
                 if agent is None or agent_ctx is None:
-                    history.append({"role": "user", "content": message})
-                    history.append({"role": "assistant", "content": "Error: System failed to initialize."})
+                    history.append([message, "Error: System failed to initialize."])
                     return "", history
                 try:
                     reasoning, response, searches = await run_with_trace(
                         agent, agent_ctx, message, memory
                     )
-                    history.append({"role": "user", "content": message})
-                    history.append({"role": "assistant", "content": response})
+                    history.append([message, response])
                     return "", history
                 except Exception as e:
-                    history.append({"role": "user", "content": message})
-                    history.append({"role": "assistant", "content": f"Error: {str(e)}"})
+                    history.append([message, f"Error: {str(e)}"])
                     return "", history
 
             send_btn.click(respond, [msg, chatbot], [msg, chatbot])
