@@ -88,13 +88,36 @@ def get_memory_context(memory):
 
 # === BUILD AGENT ===
 
+def get_api_key():
+    """Get DeepSeek API key from environment or file."""
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if api_key:
+        return api_key
+    
+    # Try to read from file
+    key_file = Path(__file__).parent / "DEEPSEEK_API_KEY.txt"
+    if key_file.exists():
+        try:
+            api_key = key_file.read_text(encoding="utf-8").strip()
+            if api_key:
+                return api_key
+        except Exception:
+            pass
+    return ""
+
+
 def build_agent():
     """Build the full agentic pipeline."""
+    
+    api_key = get_api_key()
+    if not api_key:
+        print("ERROR: DEEPSEEK_API_KEY not found in environment or DEEPSEEK_API_KEY.txt")
+        return None
 
     llm = OpenAILike(
         model="deepseek-chat",
         api_base="https://api.deepseek.com/v1",
-        api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+        api_key=api_key,
         is_chat_model=True,
         context_window=64000,
         max_tokens=2048,
