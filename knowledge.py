@@ -4,9 +4,10 @@ Brain - Clean DeepSeek Integration
 import os
 import json
 import asyncio
+import threading
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import httpx
 
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, Settings
@@ -30,6 +31,14 @@ if os.environ.get("SPACE_ID"):
 DEEPSEEK_API_KEY = ""
 _search_index = None
 _memory_cache = None
+_memory_lock = threading.Lock()
+
+# Constants
+MAX_MESSAGE_LENGTH = 10000  # Characters
+MAX_HISTORY_TURNS = 3  # Number of exchanges to keep
+MAX_SEARCH_RESULTS = 3  # Number of search results to include
+MAX_RESULT_LENGTH = 600  # Characters per result
+MAX_TOKENS_RESPONSE = 2048
 
 
 def get_api_key() -> str:
@@ -85,6 +94,12 @@ def get_or_build_index():
         except Exception as e:
             print(f"Could not load existing index: {e}")
             print("Rebuilding index...")
+            # Clear potentially corrupted chroma dir
+            try:
+                import shutil
+                shutil.rmtree(CHROMA_DIR)
+            except Exception:
+                pass
     
     # Build new index
     print("Loading documents from KNOWLEDGE...")
@@ -128,7 +143,11 @@ class SearchTool:
         if self.query_engine is None:
             self.query_engine = self.index.as_query_engine(similarity_top_k=self.top_k)
         
-        response = self.query_engine.query(query)
+        try:
+            response = self.query_engine.query(query)
+        except Exception as e:
+            print(f"Search error: {e}")
+            return []
         
         results = []
         if hasattr(response, 'source_nodes'):
@@ -149,7 +168,8 @@ def load_memory():
     
     if MEMORY_FILE.exists():
         try:
-            _memory_cache = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
+            with _memory_lock:
+                _memory_cache = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
             return _memory_cache
         except Exception:
             pass
@@ -159,10 +179,11 @@ def load_memory():
 
 
 def save_memory(memory):
-    """Save memory to disk."""
+    """Save memory to disk with thread safety."""
     try:
         MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        MEMORY_FILE.write_text(json.dumps(memory, indent=2), encoding="utf-8")
+        with _memory_lock:
+            MEMORY_FILE.write_text(json.dumps(memory, indent=2), encoding="utf-8")
     except Exception as e:
         print(f"Warning: Could not save memory: {e}")
 
@@ -171,8 +192,8 @@ def record_exchange(memory, user_msg: str, agent_response: str, searches: List[s
     """Record a conversation exchange to persistent memory."""
     exchange = {
         "timestamp": datetime.now().isoformat(),
-        "user": user_msg,
-        "agent": agent_response,
+        "user": user_msg[:MAX_MESSAGE_LENGTH],  # Truncate if needed
+        "agent": agent_response[:MAX_MESSAGE_LENGTH * 2],  # Allow longer responses
         "searches": searches,
     }
     
@@ -188,7 +209,7 @@ def record_exchange(memory, user_msg: str, agent_response: str, searches: List[s
     save_memory(memory)
 
 
-def get_recent_history(memory, n: int = 3) -> List[Dict]:
+def get_recent_history(memory, n: int = MAX_HISTORY_TURNS) -> List[Dict]:
     """Get recent conversation history as structured list."""
     if not memory.get("sessions"):
         return []
@@ -201,9 +222,10 @@ async def call_deepseek_chat(
     messages: List[Dict[str, str]],
     api_key: str,
     temperature: float = 0.7,
-    max_tokens: int = 2048,
+    max_tokens: int = MAX_TOKENS_RESPONSE,
+    retries: int = 3,
 ) -> str:
-    """Call DeepSeek API directly."""
+    """Call DeepSeek API directly with retry logic."""
     
     url = "https://api.deepseek.com/v1/chat/completions"
     
@@ -219,11 +241,31 @@ async def call_deepseek_chat(
         "max_tokens": max_tokens,
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, headers=headers, json=payload, timeout=60.0)
-        response.raise_for_status()
-        data = response.json()
-        return data["choices"][0]["message"]["content"]
+    last_error = None
+    for attempt in range(retries):
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload, timeout=60.0)
+                response.raise_for_status()
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            if e.response.status_code == 429:  # Rate limit
+                wait_time = 2 ** attempt  # Exponential backoff
+                print(f"Rate limited, waiting {wait_time}s...")
+                await asyncio.sleep(wait_time)
+                continue
+            elif e.response.status_code >= 500:  # Server error, retry
+                await asyncio.sleep(1)
+                continue
+            raise  # Client error, don't retry
+        except (httpx.NetworkError, httpx.TimeoutException) as e:
+            last_error = e
+            await asyncio.sleep(1)
+            continue
+    
+    raise last_error or Exception("All retries failed")
 
 
 # === AGENT LOGIC ===
@@ -240,6 +282,13 @@ Guidelines:
 - Be concise and direct"""
 
 
+def truncate_for_tokens(text: str, max_chars: int = 8000) -> str:
+    """Rough truncation to stay within token limits."""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "... [truncated]"
+
+
 async def run_agent(
     search_tool: SearchTool,
     message: str,
@@ -248,36 +297,59 @@ async def run_agent(
 ) -> Tuple[str, List[str]]:
     """Run the agent with search capability."""
     
-    # Build message history (last 3 exchanges for context)
-    history = get_recent_history(memory, n=3)
+    # Validate/truncate input
+    message = message.strip()
+    if len(message) > MAX_MESSAGE_LENGTH:
+        message = message[:MAX_MESSAGE_LENGTH] + "... [truncated]"
+    
+    # Build message history (last N exchanges for context)
+    history = get_recent_history(memory, n=MAX_HISTORY_TURNS)
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     
-    # Add history as separate messages
+    # Add history as separate messages (truncated)
     for ex in history:
-        messages.append({"role": "user", "content": ex["user"]})
-        messages.append({"role": "assistant", "content": ex["agent"]})
+        messages.append({
+            "role": "user", 
+            "content": truncate_for_tokens(ex["user"], 2000)
+        })
+        messages.append({
+            "role": "assistant", 
+            "content": truncate_for_tokens(ex["agent"], 4000)
+        })
     
     # Add current message
     messages.append({"role": "user", "content": message})
     
     # First call - see if agent wants to search
     searches = []
-    response_text = await call_deepseek_chat(messages, api_key)
+    try:
+        response_text = await call_deepseek_chat(messages, api_key)
+    except Exception as e:
+        return f"Error calling API: {str(e)}", []
     
     # Check if search is needed
     if response_text.strip().upper().startswith("SEARCH:"):
         # Extract search query
         search_query = response_text.strip()[7:].strip()
+        if len(search_query) > 200:
+            search_query = search_query[:200]
         searches.append(search_query)
         
         # Perform search
-        search_results = search_tool.search(search_query)
+        try:
+            search_results = search_tool.search(search_query)
+        except Exception as e:
+            print(f"Search failed: {e}")
+            search_results = []
         
-        # Build search context
+        # Build search context (limited to prevent token overflow)
         if search_results:
             search_context = "=== SEARCH RESULTS ===\n\n"
-            for i, result in enumerate(search_results[:5], 1):  # Top 5 results
-                search_context += f"[{i}] {result[:800]}...\n\n"
+            for i, result in enumerate(search_results[:MAX_SEARCH_RESULTS], 1):
+                truncated = result[:MAX_RESULT_LENGTH]
+                if len(result) > MAX_RESULT_LENGTH:
+                    truncated += "..."
+                search_context += f"[{i}] {truncated}\n\n"
         else:
             search_context = "=== SEARCH RESULTS ===\nNo relevant results found.\n"
         
@@ -286,7 +358,10 @@ async def run_agent(
         messages.append({"role": "user", "content": search_context})
         
         # Second call with search results
-        response_text = await call_deepseek_chat(messages, api_key)
+        try:
+            response_text = await call_deepseek_chat(messages, api_key)
+        except Exception as e:
+            response_text = f"Search completed but error generating response: {str(e)}"
     
     # Record to memory
     record_exchange(memory, message, response_text, searches)
