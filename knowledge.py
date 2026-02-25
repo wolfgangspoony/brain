@@ -129,12 +129,17 @@ def get_or_build_index():
     
     # Build new index
     print("Loading documents from KNOWLEDGE...")
-    documents = SimpleDirectoryReader(
-        str(KNOWLEDGE_DIR),
-        recursive=True,
-        required_exts=[".md", ".txt"],
-    ).load_data()
-    print(f"Loaded {len(documents)} documents.")
+    try:
+        documents = SimpleDirectoryReader(
+            str(KNOWLEDGE_DIR),
+            recursive=True,
+            required_exts=[".md", ".txt"],
+            filename_as_id=True,
+        ).load_data()
+        print(f"Loaded {len(documents)} documents.")
+    except Exception as e:
+        print(f"Error loading documents: {e}")
+        return None
     
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
@@ -175,16 +180,15 @@ class SearchTool:
                 # Run sync query in thread pool to not block async loop
                 loop = asyncio.get_event_loop()
                 response = await loop.run_in_executor(None, self.query_engine.query, query)
+                
+                results = []
+                if hasattr(response, 'source_nodes'):
+                    for node in response.source_nodes:
+                        results.append(node.node.text)
+                return results
             except Exception as e:
                 print(f"Search error: {e}")
                 return []
-        
-        results = []
-        if hasattr(response, 'source_nodes'):
-            for node in response.source_nodes:
-                results.append(node.node.text)
-        
-        return results
 
 
 # === MEMORY ===
@@ -213,15 +217,20 @@ async def load_memory():
 
 
 async def save_memory(memory):
-    """Save memory to disk with async safety."""
+    """Save memory to disk with async safety and atomic writes."""
     try:
-        MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
         async with _memory_lock:
             loop = asyncio.get_event_loop()
             content = json.dumps(memory, indent=2, ensure_ascii=False)
-            await loop.run_in_executor(
-                None, lambda: MEMORY_FILE.write_text(content, encoding="utf-8")
-            )
+            
+            # Atomic write: write to temp then rename
+            def write_atomic():
+                MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+                temp_file = MEMORY_FILE.with_suffix('.tmp')
+                temp_file.write_text(content, encoding="utf-8")
+                temp_file.replace(MEMORY_FILE)
+            
+            await loop.run_in_executor(None, write_atomic)
     except Exception as e:
         print(f"Warning: Could not save memory: {e}")
 

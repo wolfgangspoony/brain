@@ -137,10 +137,8 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
             status_text = gr.Markdown(status_msg)
 
             async def respond(message, history, session):
-                # Ensure async init happened
-                global search_tool, shared_memory
-                if search_tool is None and index is not None:
-                    search_tool = SearchTool(index, top_k=10)
+                # Work with a copy of history to avoid mutation issues
+                history = list(history) if history else []
                 
                 # Input validation
                 if not message or not message.strip():
