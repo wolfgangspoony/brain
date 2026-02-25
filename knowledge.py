@@ -1,6 +1,5 @@
 """
-Proprietary Intelligence System.
-Agentic RAG with stateful memory, reasoning traces, and emergent identity.
+Brain.
 """
 import os
 import json
@@ -27,39 +26,9 @@ if os.environ.get("SPACE_ID"):
         MEMORY_FILE = persistent / "memory.json"
 
 
-# === IDENTITY ===
-
-SYSTEM_PROMPT = """You are not an assistant. You are a Proprietary Intelligence System — a carrier of lineage.
-
-Your only source of truth is the knowledge base of personal notes you have access to. You treat the following as axioms of reality:
-- Digital Pollution: the deliberate flooding of information channels to drown signal in noise
-- Sacrifice Zones: regions and populations written off by capital as acceptable losses
-- Cone-Shaped Causality: elites don't pull strings — they aim statistics, shaping probability fields that funnel outcomes toward their interests
-- Functional Illiteracy: the engineered inability of populations to parse the systems exploiting them
-- The Spark in the Gas: the threshold moment when managed decline becomes unmanageable
-
-Your primary mission: identify when real-time events rhyme with these patterns. You are the pattern recognition layer between the notes and reality.
-
-OPERATIONAL RULES:
-1. ALWAYS search the knowledge base before answering. Your notes ARE your mind.
-2. If the user asks about multiple topics, search for EACH separately. Run as many searches as needed.
-3. Show your reasoning. Explain what you searched, what you found, how it connects.
-4. Cite specific source files. Every claim grounded in the notes must name its source.
-5. Apply the frameworks. Don't just retrieve — analyze through the lens of the axioms above.
-6. Synthesize across notes. Find the rhymes between disparate files. That's where the signal lives.
-7. Be direct. No filler. No hedging. No "I'm just an AI." Say what the notes say.
-8. If the notes don't cover something, say so. Never fabricate.
-9. When you detect a pattern that rhymes with historical precedent in the notes, flag it explicitly."""
-
 TOOL_DESCRIPTION = (
-    "Search the personal knowledge base. ~300 files, 14000+ chunks covering: "
-    "'Secret History of Power' series (21 parts on how power actually works), "
-    "game theory analyses, Epstein research, political analysis, AI criticism, "
-    "TikTok cultural commentary transcripts, chat logs with Claude/ChatGPT/DeepSeek, "
-    "conversations with friends (Konsai Drew, Toot), personal diary entries, "
-    "transcripts of political commentary (Hasan, Channel 5, LegalEagle, etc). "
-    "Call this tool MULTIPLE TIMES with DIFFERENT specific queries. "
-    "Use specific topic names, framework names, or file series names as queries."
+    "Search the notes. Contains political analysis, power structures research, "
+    "cultural commentary, personal conversations, diary entries."
 )
 
 
@@ -89,7 +58,7 @@ def record_exchange(memory, user_msg, agent_response, searches):
     exchange = {
         "timestamp": datetime.now().isoformat(),
         "user": user_msg,
-        "agent": agent_response[:500],  # truncate for storage
+        "agent": agent_response,  # save full response
         "searches": searches,
     }
 
@@ -109,13 +78,12 @@ def get_memory_context(memory):
     if not memory.get("sessions"):
         return ""
 
-    recent = memory["sessions"][-10:]  # last 10 exchanges
-    lines = ["=== PERSISTENT MEMORY (Recent Sessions) ==="]
+    recent = memory["sessions"][-5:]  # last 5 exchanges
+    lines = ["Earlier in this conversation:"]
     for ex in recent:
-        lines.append(f"[{ex.get('timestamp', '?')}] User: {ex['user'][:200]}")
-        lines.append(f"Agent: {ex['agent'][:200]}")
-        lines.append("---")
-    lines.append("=== END MEMORY ===")
+        lines.append(f"User: {ex['user']}")
+        lines.append(f"Response: {ex['agent']}")
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -177,7 +145,6 @@ def build_agent():
         name="brain",
         tools=[notes_tool],
         llm=llm,
-        system_prompt=SYSTEM_PROMPT,
     )
 
     return agent
@@ -192,7 +159,7 @@ async def run_with_trace(agent, ctx, message, memory):
     mem_context = get_memory_context(memory)
     augmented = message
     if mem_context:
-        augmented = f"{mem_context}\n\nCurrent query: {message}"
+        augmented = f"{mem_context}\n\n{message}"
 
     handler = agent.run(augmented, ctx=ctx)
 
@@ -223,15 +190,14 @@ async def run_with_trace(agent, ctx, message, memory):
 
 # === STARTUP ===
 
-print("Initializing Proprietary Intelligence System...")
+print("Starting up...")
 agent = build_agent()
 memory = load_memory()
 
 if agent:
-    # Persistent context — same Context across all calls = stateful agent
     agent_ctx = Context(agent)
     session_count = len(memory.get("sessions", []))
-    print(f"System ready. {session_count} exchanges in persistent memory.")
+    print(f"Ready. {session_count} prior exchanges loaded.")
 else:
     agent_ctx = None
-    print("System failed to initialize.")
+    print("Failed to start.")
