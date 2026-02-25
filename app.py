@@ -1,10 +1,14 @@
 import gradio as gr
+import json
+import shutil
 import time
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from knowledge import (
     run_agent, 
     load_memory, 
+    reload_memory,
     get_or_build_index,
     SearchTool,
     MEMORY_FILE,
@@ -97,6 +101,55 @@ async def load_history():
         return "\n".join(output)
     except Exception as e:
         return f"Error loading history: {str(e)}"
+
+
+def export_memory():
+    """Export memory.json for download."""
+    import tempfile
+    import shutil
+    
+    if not MEMORY_FILE.exists():
+        return None
+    
+    # Copy to temp file for download
+    temp_dir = tempfile.mkdtemp()
+    temp_path = Path(temp_dir) / "brain_memory.json"
+    shutil.copy(MEMORY_FILE, temp_path)
+    
+    return temp_path
+
+
+def import_memory(file):
+    """Import memory.json from upload."""
+    global shared_memory
+    
+    if file is None:
+        return "No file uploaded"
+    
+    try:
+        uploaded_path = Path(file.name)
+        # Validate JSON
+        with open(uploaded_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        if "sessions" not in data:
+            return "Invalid memory file: missing 'sessions'"
+        
+        # Backup current memory
+        if MEMORY_FILE.exists():
+            backup_path = MEMORY_FILE.with_suffix('.backup.json')
+            shutil.copy(MEMORY_FILE, backup_path)
+        
+        # Copy uploaded file to memory location
+        shutil.copy(uploaded_path, MEMORY_FILE)
+        
+        # Reload memory from disk
+        shared_memory = reload_memory()
+        
+        session_count = len(shared_memory.get("sessions", []))
+        return f"✅ Memory imported successfully! {session_count} sessions loaded."
+    except Exception as e:
+        return f"❌ Error importing: {str(e)}"
 
 
 def generate_session_id():
@@ -206,12 +259,17 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                     type="password",
                     max_lines=1,
                 )
-                pin_btn = gr.Button("Unlock")
+                with gr.Row():
+                    pin_btn = gr.Button("Unlock")
+                    import_btn = gr.Button("Import Memory")
                 pin_error = gr.Markdown("")
+                import_file = gr.File(label="Upload memory.json", visible=False)
+                import_status = gr.Markdown("")
 
             with gr.Column(visible=False) as history_section:
                 with gr.Row():
                     refresh_btn = gr.Button("Refresh")
+                    export_btn = gr.Button("Export Memory")
                     lock_btn = gr.Button("Lock")
                 history_display = gr.Textbox(
                     label="Conversation History",
@@ -220,6 +278,8 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                     interactive=False,
                     show_copy_button=True,
                 )
+                # Hidden file component for download
+                export_file = gr.File(label="Download", visible=False)
 
             def lock_history():
                 return gr.update(visible=False), gr.update(visible=True), ""
@@ -235,6 +295,11 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                 fn=lock_history,
                 outputs=[history_section, pin_section, pin_error]
             )
+            export_btn.click(fn=export_memory, outputs=[export_file])
+            
+            # Import wiring
+            import_btn.click(lambda: gr.update(visible=True), outputs=[import_file])
+            import_file.change(fn=import_memory, inputs=[import_file], outputs=[import_status])
             
             # Clear PIN input after attempt
             pin_btn.click(lambda: "", outputs=[pin_input])

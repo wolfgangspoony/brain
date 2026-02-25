@@ -453,4 +453,11 @@ def init():
     return _search_index, _memory_cache
 
 
+def reload_memory():
+    """Force reload memory from disk."""
+    global _memory_cache
+    _memory_cache = None
+    return load_memory()
+
+
 print("Brain module loaded.")
