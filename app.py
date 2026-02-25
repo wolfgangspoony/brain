@@ -188,8 +188,8 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
             status_text = gr.Markdown(status_msg)
 
             async def respond(message, history, session):
-                # Work with a copy of history to avoid mutation issues
-                history = list(history) if history else []
+                # Gradio 6.x format: list of [user_msg, bot_msg] tuples
+                history = history or []
                 
                 # Input validation
                 if not message or not message.strip():
@@ -223,6 +223,7 @@ with gr.Blocks(title="Brain", theme=gr.themes.Soft()) as demo:
                         search_info = f"🔍 {', '.join(searches)}\n\n"
                         display_response = search_info + response
                     
+                    # Gradio 6.x format: append [user_msg, bot_msg]
                     history.append([display_message, display_response])
                     return "", history, session
                     
