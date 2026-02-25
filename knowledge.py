@@ -21,12 +21,13 @@ KNOWLEDGE_DIR = Path(__file__).parent / "KNOWLEDGE"
 MEMORY_FILE = Path(__file__).parent / "memory.json"
 CHROMA_DIR = Path(__file__).parent / ".chroma"
 
-# HF Spaces persistent storage
+# HF Spaces persistent storage - always use /data on HF Spaces
 if os.environ.get("SPACE_ID"):
+    # On HF Spaces, /data is the persistent directory
     persistent = Path("/data")
-    if persistent.exists():
-        MEMORY_FILE = persistent / "memory.json"
-        CHROMA_DIR = persistent / ".chroma"
+    persistent.mkdir(parents=True, exist_ok=True)
+    MEMORY_FILE = persistent / "memory.json"
+    CHROMA_DIR = persistent / ".chroma"
 
 DEEPSEEK_API_KEY = ""
 _search_index = None
@@ -249,10 +250,7 @@ async def record_exchange(memory, user_msg: str, agent_response: str, searches: 
     
     memory["sessions"].append(exchange)
     
-    # Keep last 100 sessions
-    if len(memory["sessions"]) > 100:
-        memory["sessions"] = memory["sessions"][-100:]
-    
+    # Keep all sessions forever (this is a memory entity, not a tool)
     await save_memory(memory)
 
 
